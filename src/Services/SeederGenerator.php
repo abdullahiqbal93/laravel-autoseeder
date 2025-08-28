@@ -728,7 +728,7 @@ PHP;
                 if (!empty($meta['enum']) && is_array($meta['enum'])) {
                     $choices = array_map(function ($v) { return "'" . addslashes($v) . "'"; }, $meta['enum']);
                     $list = implode(', ', $choices);
-                    $expr = "[{$list}][array_rand([{$list}])]";
+                    $expr = "\$faker->randomElement([{$list}])";
                 } else {
                     $expr = "\$faker->word()";
                 }

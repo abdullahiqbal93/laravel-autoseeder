@@ -115,6 +115,15 @@ class SchemaAnalyzer
                 $length = $norm['length'] ?? null;
                 $precision = $norm['precision'] ?? null;
                 $scale = $norm['scale'] ?? null;
+
+                if (empty($norm['enum'])) {
+                    $enumValues = $this->detectSqliteEnum($table, $r->name);
+                    if ($enumValues) {
+                        $norm['type'] = 'enum';
+                        $norm['enum'] = $enumValues;
+                    }
+                }
+
                 $columns[$r->name] = [
                     'type' => $norm['type'],
                     'enum' => $norm['enum'] ?? null,
@@ -453,6 +462,48 @@ class SchemaAnalyzer
                     return $enumValues;
                 }
             }
+        } catch (\Throwable $e) {
+        }
+
+        return null;
+    }
+
+    protected function detectSqliteEnum(string $table, string $column): ?array
+    {
+        try {
+            $constraints = DB::select("
+                SELECT sql
+                FROM sqlite_master
+                WHERE type = 'table' AND name = ?
+            ", [$table]);
+
+            if (empty($constraints)) {
+                return null;
+            }
+
+            $createTableSql = $constraints[0]->sql ?? '';
+            if (empty($createTableSql)) {
+                return null;
+            }
+
+            $pattern = '/CHECK\s*\(\s*' . preg_quote($column, '/') . '\s+IN\s*\(\s*([\'"][^\'"]*[\'"](?:\s*,\s*[\'"][^\'"]*[\'"])*)\s*\)\s*\)/i';
+            
+            if (preg_match($pattern, $createTableSql, $matches)) {
+                $values = $matches[1];
+                $enumValues = array_map(function ($v) {
+                    return trim(trim($v), "'\"");
+                }, explode(',', $values));
+                return $enumValues;
+            }
+
+            $orPattern = '/CHECK\s*\(\s*(?:' . preg_quote($column, '/') . '\s*=\s*[\'"][^\'"]*[\'"]\s+OR\s+)*' . preg_quote($column, '/') . '\s*=\s*[\'"]([^\'"]*)[\'"]\s*\)/i';
+            
+            if (preg_match_all('/' . preg_quote($column, '/') . '\s*=\s*[\'"]([^\'"]*)[\'"]/i', $createTableSql, $orMatches)) {
+                if (!empty($orMatches[1])) {
+                    return $orMatches[1];
+                }
+            }
+
         } catch (\Throwable $e) {
         }
 
