@@ -36,7 +36,7 @@ php artisan db:seed
 
 - PHP: >= 7.4
 - Laravel: >= 8.0
-- Supported DB: MySQL, PostgreSQL, SQLite, SQL Server (enum support for MySQL/MariaDB, PostgreSQL, and SQLite)
+- Supported DB: MySQL, PostgreSQL, SQLite, SQL Server
 
 ---
 
@@ -96,7 +96,7 @@ php artisan make:auto-seeders --force
 ## Key features
 
 - Automatic model discovery (scans `app/Models` or provided path)
-- Type-aware data generation (respect column types/lengths, including enum values across all supported databases)
+- Type-aware data generation (respect column types/lengths, including full enum support)
 - Foreign-key aware seeding and ordering
 - Relationship detection (belongsTo, hasMany, belongsToMany, morphs, etc.)
 - Unique & composite-unique constraint handling

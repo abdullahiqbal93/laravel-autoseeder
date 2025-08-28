@@ -49,8 +49,6 @@ class RelationshipDetector
                     ];
                 }
             } catch (\Throwable $e) {
-                // Log the error but continue processing other methods
-                // This helps with debugging relationship detection issues
                 if (function_exists('error_log')) {
                     error_log("Relationship detection failed for {$modelClass}::{$method->getName()}: " . $e->getMessage());
                 }

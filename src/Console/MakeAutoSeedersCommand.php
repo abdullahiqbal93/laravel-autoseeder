@@ -15,22 +15,24 @@ class MakeAutoSeedersCommand extends Command
                           {--path=app/Models : Path to your models directory}
                           {--limit=10 : Number of records to generate per model}
                           {--only= : Comma-separated list of specific models to generate seeders for}
-                          {--force : Overwrite existing seeders without prompting}';
+                          {--force : Overwrite existing seeders without prompting}
+                          {--quiet : Suppress output}
+                          {--verbose : Verbose output}';
 
     protected $description = 'Generate realistic database seeders for Laravel models with relationships and type-aware data.';
 
     public function handle()
     {
         $path = $this->option('path');
-        if (!str_starts_with($path, '/') && !str_starts_with($path, '\\') && !preg_match('/^[A-Za-z]:/', $path)) {
+        if (!str_starts_with($path, '/') && !preg_match('/^[A-Za-z]:/', $path) && !preg_match('/^\\\\[^\\\\]/', $path)) {
             $path = base_path($path);
         }
         $limit = (int) $this->option('limit');
         $only = $this->option('only') ? array_map('trim', explode(',', $this->option('only'))) : [];
+        $only = array_filter($only); 
         $force = (bool) $this->option('force');
         $quiet = $this->output->isQuiet();
 
-        // Validate inputs
         if ($limit < 1) {
             $this->error('Limit must be at least 1');
             return 1;
@@ -58,9 +60,7 @@ class MakeAutoSeedersCommand extends Command
             return 0;
         }
 
-        // Check for existing seeders and prompt for confirmation if --force is not used
         if (!$force) {
-            // Filter models first to get the actual models that will be processed
             $modelsToProcess = $models;
             if ($only) {
                 $modelsToProcess = array_filter($models, function ($m) use ($only) {
@@ -78,15 +78,13 @@ class MakeAutoSeedersCommand extends Command
                     $this->newLine();
                 }
 
-                // Check if we're in an interactive terminal
                 if ($this->input->isInteractive()) {
                     if (!$this->confirm('Do you want to overwrite existing seeders?', false)) {
                         $this->info('❌ Operation cancelled by user.');
                         return 0;
                     }
-                    $force = true; // Set force to true since user confirmed
+                    $force = true; 
                 } else {
-                    // Non-interactive mode: show warning and abort
                     $this->error('❌ Existing seeders found. Use --force to overwrite or remove existing seeders first.');
                     $this->error('Existing seeders: ' . implode(', ', $existingSeeders));
                     return 1;
@@ -94,12 +92,18 @@ class MakeAutoSeedersCommand extends Command
             }
         }
 
-        // Filter models if --only option is used
         if ($only) {
+            $originalModels = $models; 
             $originalCount = count($models);
             $models = array_filter($models, function ($m) use ($only) {
                 return in_array(class_basename($m), $only, true) || in_array($m, $only, true);
             });
+
+            if (empty($models)) {
+                $this->error('No matching models found for: ' . implode(', ', $only));
+                $this->info('Available models: ' . implode(', ', array_map('class_basename', $originalModels)));
+                return 1;
+            }
 
             if (count($models) !== $originalCount) {
                 $foundModels = array_map('class_basename', $models);
@@ -113,7 +117,6 @@ class MakeAutoSeedersCommand extends Command
             $this->info("📊 Found " . count($models) . ' model(s) to process');
         }
 
-        // Initialize services
         try {
             $schema = new SchemaAnalyzer();
             $relDetector = new RelationshipDetector();
@@ -124,7 +127,6 @@ class MakeAutoSeedersCommand extends Command
             return 1;
         }
 
-        // Analyze models
         $meta = [];
         $progressBar = !$quiet ? $this->output->createProgressBar(count($models)) : null;
         $progressBar?->setFormat('verbose');
@@ -150,7 +152,11 @@ class MakeAutoSeedersCommand extends Command
         }
 
         if (empty($meta)) {
-            $this->error('No valid models could be analyzed. Please check your model files.');
+            $this->error('No valid models could be analyzed. Please check:');
+            $this->line('  • Model files exist and are properly structured');
+            $this->line('  • Models extend Illuminate\Database\Eloquent\Model');
+            $this->line('  • Database connection is properly configured');
+            $this->line('  • Tables exist in the database');
             return 1;
         }
 
@@ -165,7 +171,6 @@ class MakeAutoSeedersCommand extends Command
             }
         }
 
-        // Generate seeders
         $successCount = 0;
         $progressBar = !$quiet ? $this->output->createProgressBar(count($order)) : null;
         $progressBar?->setFormat('verbose');
@@ -198,7 +203,6 @@ class MakeAutoSeedersCommand extends Command
             $this->newLine();
         }
 
-        // Update DatabaseSeeder
         try {
             $merged = $manager->updateDatabaseSeeder($order, $force);
             if (!$merged && !$force) {
@@ -221,9 +225,6 @@ class MakeAutoSeedersCommand extends Command
         return 0;
     }
 
-    /**
-     * Check which seeders already exist for the given models
-     */
     private function checkExistingSeeders(array $models, string $seedersPath): array
     {
         $existing = [];
@@ -238,7 +239,6 @@ class MakeAutoSeedersCommand extends Command
             }
         }
 
-        // Also check for DatabaseSeeder
         $dbSeederFile = $seedersPath . DIRECTORY_SEPARATOR . 'DatabaseSeeder.php';
         if (file_exists($dbSeederFile)) {
             $existing[] = 'DatabaseSeeder.php';

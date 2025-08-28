@@ -28,12 +28,63 @@ class SchemaAnalyzer
 
         try {
             if (method_exists(DB::getPdo(), 'getAttribute')) {
+                $driver = DB::getDriverName();
+                if ($driver === 'mysql' || $driver === 'maria') {
+                    $rows = DB::select('DESCRIBE ' . $table);
+                    foreach ($rows as $r) {
+                        $name = $r->Field;
+                        $raw = $r->Type;
+                        $norm = $this->normalizeColumnType($raw);
+                        $columns[$name] = [
+                            'type' => $norm['type'],
+                            'enum' => $norm['enum'] ?? null,
+                            'nullable' => ($r->Null === 'YES'),
+                            'default' => $r->Default,
+                            'autoincrement' => stripos($r->Extra, 'auto_increment') !== false,
+                            'unsigned' => $norm['unsigned'] ?? false,
+                            'length' => $norm['length'] ?? null,
+                            'precision' => $norm['precision'] ?? null,
+                            'scale' => $norm['scale'] ?? null,
+                        ];
+                    }
+                    return $this->augmentWithForeignAndUnique($table, $columns);
+                }
+
                 $schemaManager = DB::getDoctrineSchemaManager();
                 $cols = $schemaManager->listTableColumns($table);
 
                 foreach ($cols as $col) {
                     $rawType = (string) $col->getType()->getName();
+
+                    $driver = DB::getDriverName();
+                    if ($driver === 'mysql' || $driver === 'maria') {
+                        try {
+                            $platform = $schemaManager->getDatabasePlatform();
+                            $columnType = $platform->getColumnDeclarationSQL($col->getName(), $col->toArray());
+                            if (preg_match('/\s+([a-zA-Z][a-zA-Z0-9_]*\(.*?\))/', $columnType, $matches)) {
+                                $rawType = $matches[1];
+                            }
+                        } catch (\Throwable $e) {
+                            try {
+                                $describeResult = DB::select('DESCRIBE ' . $table . ' ' . $col->getName());
+                                if (!empty($describeResult)) {
+                                    $rawType = $describeResult[0]->Type;
+                                }
+                            } catch (\Throwable $_) {}
+                        }
+                    }
+
                     $norm = $this->normalizeColumnType($rawType);
+
+                    $driver = DB::getDriverName();
+                    if ($driver === 'pgsql' && !$this->isPostgresBuiltinType($rawType) && empty($norm['enum'])) {
+                        $enumValues = $this->detectPostgresEnum($rawType);
+                        if ($enumValues) {
+                            $norm['type'] = 'enum';
+                            $norm['enum'] = $enumValues;
+                        }
+                    }
+
                     $length = null; $precision = null; $scale = null;
                     try { $length = $col->getLength(); } catch (\Throwable $_) { $length = null; }
                     try { $precision = $col->getPrecision(); } catch (\Throwable $_) { $precision = null; }
@@ -87,6 +138,8 @@ class SchemaAnalyzer
                 $rows = DB::select("SELECT column_name as Field, data_type as Type, is_nullable as Null, column_default as Default, '' as Extra FROM information_schema.columns WHERE table_name = ? AND table_schema = 'public'", [$table]);
             } elseif ($driver === 'sqlite') {
                 $rows = DB::select("PRAGMA table_info('" . $table . "')");
+            } elseif ($driver === 'sqlsrv') {
+                $rows = DB::select("SELECT COLUMN_NAME as Field, DATA_TYPE as Type, IS_NULLABLE as Null, COLUMN_DEFAULT as Default, '' as Extra FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND TABLE_SCHEMA = 'dbo'", [$table]);
             } else {
                 throw new \RuntimeException('Unsupported database driver: ' . $driver);
             }
@@ -96,10 +149,18 @@ class SchemaAnalyzer
                 $raw = $r->Type ?? $r->type ?? 'string';
                 $norm = $this->normalizeColumnType($raw);
 
-                // Special handling for PostgreSQL enums
-                if ($driver === 'pgsql' && !isset($norm['enum'])) {
-                    $enumValues = $this->getPostgresEnumValues($raw);
-                    if (!empty($enumValues)) {
+                $driver = DB::getDriverName();
+                if ($driver === 'pgsql' && !$this->isPostgresBuiltinType($raw) && empty($norm['enum'])) {
+                    $enumValues = $this->detectPostgresEnum($raw);
+                    if ($enumValues) {
+                        $norm['type'] = 'enum';
+                        $norm['enum'] = $enumValues;
+                    }
+                }
+
+                if ($driver === 'sqlsrv' && empty($norm['enum'])) {
+                    $enumValues = $this->detectSqlServerEnum($table, $name);
+                    if ($enumValues) {
                         $norm['type'] = 'enum';
                         $norm['enum'] = $enumValues;
                     }
@@ -240,82 +301,6 @@ class SchemaAnalyzer
                         foreach ($idata['cols'] as $col) { if (isset($columns[$col])) { $columns[$col]['unique'] = true; } }
                     }
                 }
-                // Detect enum columns and their values for MySQL
-                $enumRows = DB::select("SELECT COLUMN_NAME, COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND DATA_TYPE = 'enum'", [$dbName, $table]);
-                foreach ($enumRows as $r) {
-                    $col = $r->COLUMN_NAME ?? $r->column_name ?? null;
-                    $colType = $r->COLUMN_TYPE ?? $r->column_type ?? null;
-                    if ($col && $colType && isset($columns[$col])) {
-                        // Extract enum values from COLUMN_TYPE like "enum('value1','value2','value3')"
-                        if (preg_match('/enum\((.*)\)/i', $colType, $m)) {
-                            $vals = array_map(function ($v) { return trim($v, "'\""); }, explode(',', $m[1]));
-                            $columns[$col]['type'] = 'enum';
-                            $columns[$col]['enum'] = $vals;
-                            $maxLen = 0;
-                            foreach ($vals as $v) { $maxLen = max($maxLen, strlen($v)); }
-                            $columns[$col]['length'] = $maxLen ?: null;
-                        }
-                    }
-                }
-            } elseif ($driver === 'pgsql') {
-                $dbName = DB::getDatabaseName();
-                // Detect PostgreSQL enum columns
-                $enumRows = DB::select("
-                    SELECT
-                        c.column_name,
-                        t.typname as enum_type,
-                        e.enumlabel
-                    FROM information_schema.columns c
-                    JOIN pg_type t ON c.udt_name = t.typname
-                    JOIN pg_enum e ON t.oid = e.enumtypid
-                    WHERE c.table_name = ? AND c.table_schema = 'public'
-                    ORDER BY c.column_name, e.enumsortorder
-                ", [$table]);
-
-                $enumData = [];
-                foreach ($enumRows as $r) {
-                    $col = $r->column_name ?? null;
-                    $enumType = $r->enum_type ?? null;
-                    $enumValue = $r->enumlabel ?? null;
-
-                    if ($col && $enumValue) {
-                        if (!isset($enumData[$col])) {
-                            $enumData[$col] = [];
-                        }
-                        $enumData[$col][] = $enumValue;
-                    }
-                }
-
-                // Update columns with enum information
-                foreach ($enumData as $col => $vals) {
-                    if (isset($columns[$col])) {
-                        $columns[$col]['type'] = 'enum';
-                        $columns[$col]['enum'] = $vals;
-                        $maxLen = 0;
-                        foreach ($vals as $v) { $maxLen = max($maxLen, strlen($v)); }
-                        $columns[$col]['length'] = $maxLen ?: null;
-                    }
-                }
-            } elseif ($driver === 'sqlite') {
-                // For SQLite, try to detect enum-like CHECK constraints
-                // This is a best-effort approach since SQLite doesn't have native enums
-                $checkRows = DB::select("PRAGMA table_info('" . $table . "')");
-                foreach ($checkRows as $r) {
-                    $col = $r->name ?? null;
-                    if (!$col || !isset($columns[$col])) continue;
-
-                    // Look for common enum patterns in column names or check if it's TEXT with potential enum values
-                    $colLower = strtolower($col);
-                    $enumPatterns = ['status', 'type', 'state', 'priority', 'level', 'category', 'role'];
-
-                    if (in_array($colLower, $enumPatterns) && $columns[$col]['type'] === 'string') {
-                        // For SQLite, we can't easily detect the exact enum values from CHECK constraints
-                        // So we'll mark it as enum type but without specific values
-                        // The SeederGenerator will handle this gracefully
-                        $columns[$col]['type'] = 'enum';
-                        $columns[$col]['enum'] = null; // Will fallback to string generation
-                    }
-                }
             }
         } catch (\Throwable $e) {
         }
@@ -427,13 +412,79 @@ class SchemaAnalyzer
         return $out;
     }
 
-    protected function getPostgresEnumValues(string $enumType): array
+
+    protected function detectPostgresEnum(string $typeName): ?array
     {
         try {
-            $rows = DB::select("SELECT enumlabel FROM pg_enum WHERE enumtypid = (SELECT oid FROM pg_type WHERE typname = ?)", [$enumType]);
-            return array_column($rows, 'enumlabel');
+            $enumValues = DB::select("
+                SELECT enumtypid::regtype as type_name, enumlabel
+                FROM pg_enum
+                WHERE enumtypid::regtype = ?
+                ORDER BY enumsortorder
+            ", [$typeName]);
+
+            if (!empty($enumValues)) {
+                return array_column($enumValues, 'enumlabel');
+            }
         } catch (\Throwable $e) {
-            return [];
         }
+
+        return null;
+    }
+
+    protected function detectSqlServerEnum(string $table, string $column): ?array
+    {
+        try {
+            $constraints = DB::select("
+                SELECT cc.definition
+                FROM sys.check_constraints cc
+                INNER JOIN sys.columns c ON cc.parent_object_id = c.object_id AND cc.parent_column_id = c.column_id
+                INNER JOIN sys.tables t ON c.object_id = t.object_id
+                WHERE t.name = ? AND c.name = ?
+            ", [$table, $column]);
+
+            foreach ($constraints as $constraint) {
+                $definition = $constraint->definition ?? '';
+                if (preg_match("/IN\s*\(\s*('[^']*'(?:\s*,\s*'[^']*')*)\s*\)/i", $definition, $matches)) {
+                    $values = $matches[1];
+                    $enumValues = array_map(function ($v) {
+                        return trim($v, "'\"");
+                    }, explode(',', $values));
+                    return $enumValues;
+                }
+            }
+        } catch (\Throwable $e) {
+        }
+
+        return null;
+    }
+
+    protected function isPostgresBuiltinType(string $type): bool
+    {
+        $builtinTypes = [
+            'bigint', 'bigserial', 'bit', 'boolean', 'box', 'bytea', 'character', 'cidr',
+            'circle', 'date', 'decimal', 'double precision', 'float', 'inet', 'integer',
+            'interval', 'json', 'jsonb', 'line', 'lseg', 'macaddr', 'money', 'numeric',
+            'path', 'point', 'polygon', 'real', 'serial', 'smallint', 'smallserial',
+            'text', 'time', 'timestamp', 'timestamptz', 'timetz', 'tsquery', 'tsvector',
+            'uuid', 'varchar', 'xml'
+        ];
+
+        $type = strtolower(trim($type));
+        return in_array($type, $builtinTypes);
+    }
+
+
+    protected function isSqlServerBuiltinType(string $type): bool
+    {
+        $builtinTypes = [
+            'bigint', 'binary', 'bit', 'char', 'date', 'datetime', 'datetime2', 'datetimeoffset',
+            'decimal', 'float', 'image', 'int', 'money', 'nchar', 'ntext', 'numeric', 'nvarchar',
+            'real', 'smalldatetime', 'smallint', 'smallmoney', 'sql_variant', 'sysname', 'text',
+            'time', 'timestamp', 'tinyint', 'uniqueidentifier', 'varbinary', 'varchar', 'xml'
+        ];
+
+        $type = strtolower(trim($type));
+        return in_array($type, $builtinTypes);
     }
 }

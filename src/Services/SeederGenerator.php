@@ -13,7 +13,6 @@ class SeederGenerator
     protected $relDetector;
     protected $defaultLimit = 10;
     protected $faker;
-    // context during generation
     protected $currentModel = null;
     protected $currentTable = null;
 
@@ -42,10 +41,9 @@ class SeederGenerator
             }
         }
 
-    // build associative props so we can alter parent_id behavior for self-relations
     $propsAssoc = [];
-    $uniqueFkAvailable = []; // runtime init lines for one-to-one FK pools
-    $uniqueFkSource = []; // track source info for placeholder creation (model or table)
+    $uniqueFkAvailable = []; 
+    $uniqueFkSource = [];
     foreach ($columns as $col => $meta) {
             if ($meta['autoincrement'] ?? false) {
                 continue;
@@ -54,7 +52,6 @@ class SeederGenerator
                 continue;
             }
 
-            // skip polymorphic type columns (_type) here; we'll handle pairs below
             if (substr($col, -5) === '_type') {
                 continue;
             }
@@ -62,17 +59,14 @@ class SeederGenerator
             $expr = null;
             if (substr($col, -3) === '_id') {
                 $relName = substr($col, 0, -3);
-                // skip polymorphic pairs for now; will handle after main props are built
                 if (isset($columns[$relName . '_type'])) {
                     continue;
                 }
                     $relatedClass = null;
 
-                    // direct relation name match
                     if (isset($belongsToMap[$relName]) && !empty($belongsToMap[$relName])) {
                         $relatedClass = $belongsToMap[$relName];
                     } else {
-                        // try to match by related class basename (Post -> post)
                         foreach ($relations as $r2) {
                             if (!empty($r2['related'])) {
                                 $parts = explode('\\', $r2['related']);
@@ -86,12 +80,9 @@ class SeederGenerator
                     }
 
                     if (!empty($relatedClass)) {
-                        // try to resolve to a real class name; prefer given related class, else try App\Models\<Name>
                         $candidate = ltrim($relatedClass, '\\');
-                            // test class existence without leading backslash
                             $testClass = $candidate;
                             if (!class_exists($testClass)) {
-                                // try common App\Models namespace with various name guesses
                                 $guesses = [
                                     'App\\Models\\' . ucfirst($relName),
                                     'App\\Models\\' . ucfirst(Str::singular($relName)),
@@ -102,14 +93,10 @@ class SeederGenerator
                             }
 
                             if (class_exists($testClass)) {
-                                // use global-qualified class name for generated code
                                 $fqOut = '\\' . ltrim($testClass, '\\');
-                                        // prepare id selection; if the column is unique (one-to-one), pick without replacement
                                         if (!empty($meta['unique']) || (!empty($meta['unique_indexes']) && count($meta['unique_indexes']) === 1 && count($meta['unique_indexes'][0]) === 1)) {
-                                            // init line for phase1
                                             $uniqueFkAvailable[$col] = "\\{$fqOut}::pluck('id')->toArray()";
                                             $uniqueFkSource[$col] = ['type' => 'model', 'class' => '\\' . ltrim($testClass, '\\')];
-                                            // pick from available pool without replacement, fallback to existing ID or null if nullable
                                             $nullable = $meta['nullable'] ?? false;
                                             if ($nullable) {
                                                 $expr = "(!empty(\$__available_{$col}) ? array_splice(\$__available_{$col}, array_rand(\$__available_{$col}), 1)[0] : ({$fqOut}::count() > 0 ? {$fqOut}::inRandomOrder()->first()->id : null))";
@@ -117,7 +104,6 @@ class SeederGenerator
                                                 $expr = "(!empty(\$__available_{$col}) ? array_splice(\$__available_{$col}, array_rand(\$__available_{$col}), 1)[0] : ({$fqOut}::count() > 0 ? {$fqOut}::inRandomOrder()->first()->id : 1))";
                                             }
                                         } else {
-                                            // ensure we never return null if not nullable; prefer existing ID, fallback to 1 if no records exist
                                             $nullable = $meta['nullable'] ?? false;
                                             if ($nullable) {
                                                 $expr = "({$fqOut}::count() > 0 ? {$fqOut}::inRandomOrder()->first()->id : null)";
@@ -126,11 +112,9 @@ class SeederGenerator
                                             }
                                         }
                             } else {
-                                // fallback: attempt to map common aliases to users, else pluralize relName to a table
                                 $lower = strtolower($relName);
                                 $userAliases = ['owner','user','author','creator','created_by','assigned_to'];
                                 if (in_array($lower, $userAliases, true) && class_exists('App\\Models\\User')) {
-                                    // prepare unique-fk pool for users if needed
                                     if (!empty($meta['unique'])) {
                                         $uniqueFkAvailable[$col] = "\\App\\Models\\User::pluck('id')->toArray()";
                                         $uniqueFkSource[$col] = ['type' => 'model', 'class' => '\\App\\Models\\User'];
@@ -141,7 +125,6 @@ class SeederGenerator
                                             $expr = "(!empty(\$__available_{$col}) ? array_splice(\$__available_{$col}, array_rand(\$__available_{$col}), 1)[0] : (\\App\\Models\\User::count() > 0 ? \\App\\Models\\User::inRandomOrder()->first()->id : 1))";
                                         }
                                     } else {
-                                        // prefer an existing user id but never return null if not nullable; fallback to 1 if no records exist
                                         $nullable = $meta['nullable'] ?? false;
                                         if ($nullable) {
                                             $expr = "(\\App\\Models\\User::count() > 0 ? \\App\\Models\\User::inRandomOrder()->first()->id : null)";
@@ -178,7 +161,6 @@ class SeederGenerator
             }
             $propsAssoc[$col] = "'" . $col . "' => " . $expr;
         }
-        // detect self-relation (model has a belongsTo to itself) to handle parent_id specially
         $selfRelation = false;
         foreach ($relations as $rcheck) {
             if (!empty($rcheck['related'])) {
@@ -193,9 +175,6 @@ class SeederGenerator
             }
         }
 
-        // If there's a self-relation, omit the self-referential _id columns from the
-        // initial create payload so we don't violate NOT NULL / FK constraints. We'll
-        // assign them in a second phase after records exist.
         $skippedSelfColumns = [];
         if ($selfRelation) {
             $partsModel = explode('\\', trim($modelClass, '\\'));
@@ -214,7 +193,6 @@ class SeederGenerator
             }
         }
 
-    // handle polymorphic *_type/*_id pairs: detect real candidate classes from other models' relations
     $polyPrepCode = '';
     foreach ($columns as $col => $meta) {
         if (substr($col, -5) !== '_type') continue;
@@ -222,11 +200,9 @@ class SeederGenerator
         $idcol = $base . '_id';
         if (!isset($columns[$idcol])) continue;
 
-        // discover candidate classes by scanning all models' relations for morph declarations that target this model
         $candidates = [];
         foreach ($allMeta as $mclass => $mdata) {
             foreach ($mdata['relations'] as $r) {
-                // if relation is morphMany/morphOne/morphToMany etc, include the owner model class as a candidate
                 $rtype = strtolower($r['type'] ?? '');
                 if (strpos($rtype, 'morph') !== false) {
                     $candidates[] = ltrim($mclass, '\\');
@@ -234,7 +210,6 @@ class SeederGenerator
             }
         }
 
-        // also try to find models whose class shortname matches <Base>
         $guess = ucfirst($base);
         foreach (array_keys($allMeta) as $mc) {
             $parts = explode('\\', trim($mc, '\\'));
@@ -244,19 +219,15 @@ class SeederGenerator
             }
         }
 
-        // fallback to User if nothing found
         if (empty($candidates)) {
             $candidates[] = 'App\\Models\\User';
         }
 
-        // unique candidates
         $candidates = array_values(array_unique($candidates));
-        // remove self from candidates so we don't pick the same model as a target
         $candidates = array_values(array_filter($candidates, function($c) use ($modelClass) {
             return ltrim($c, '\\') !== ltrim($modelClass, '\\');
         }));
 
-        // prepare runtime variables: $__<base>_type, $__<base>_id, $__<base>_skip
         $varType = '__' . $base . '_type';
         $varId = '__' . $base . '_id';
         $varSkip = '__' . $base . '_type_skip';
@@ -277,18 +248,14 @@ class SeederGenerator
     $polyPrepCode .= "                    } catch (\\Throwable \$e) { \$__ids_tmp = []; }\n";
     $polyPrepCode .= "                    if (!empty(\$__ids_tmp)) { \$" . $varType . " = \$__cand; \$" . $varId . " = \$__ids_tmp[array_rand(\$__ids_tmp)]; \$" . $varSkip . " = false; break; }\n";
     $polyPrepCode .= "                }\n";
-    // do not skip creation if no candidate found; fallback will be used from propsAssoc
     $polyPrepCode .= "                // if no candidate found, fall back to configured placeholder (e.g. App\\Models\\User)\n";
         
 
-        // include placeholders in props to satisfy NOT NULL using fallback; if a real candidate
-        // is found at runtime we will update the created record immediately after create()
         $fallback = '\\App\\Models\\User';
         if (!isset($propsAssoc[$col])) {
             $propsAssoc[$col] = "'{$col}' => '{$fallback}'";
         }
         if (!isset($propsAssoc[$idcol])) {
-            // prefer a real user id when available, else fallback to 1 if not nullable
             $nullable = $columns[$idcol]['nullable'] ?? false;
             if ($nullable) {
                 $userExpr = "(\\App\\Models\\User::count() > 0 ? \\App\\Models\\User::inRandomOrder()->first()->id : null)";
@@ -298,19 +265,16 @@ class SeederGenerator
             $propsAssoc[$idcol] = "'{$idcol}' => " . $userExpr;
         }
 
-        // prepare in-loop post-create update for this polymorphic pair if a candidate is found
         $polyInLoopUpdate = isset($polyInLoopUpdate) ? $polyInLoopUpdate : '';
         $polyInLoopUpdate .= "                if (isset(\$" . $varSkip . ") && !\$" . $varSkip . ") { try { \$created->update(['{$col}' => \$" . $varType . ", '{$idcol}' => \$" . $varId . "]); } catch (\\Throwable \$e) { } }\n";
     }
 
-    // prepare props code strings
     $propsLines = [];
     foreach ($propsAssoc as $col => $codeExpr) {
         $propsLines[] = '                ' . $codeExpr;
     }
     $propsCode = implode(",\n", $propsLines);
 
-    // collect unique-ish columns to maintain per-run uniqueness sets in generated seeder
     $uniqueCols = [];
     foreach ($columns as $cname => $cmeta) {
         $isUniqueMeta = $cmeta['unique'] ?? false;
@@ -321,7 +285,6 @@ class SeederGenerator
         }
     }
 
-    // detect composite-unique indexes (as sets of column names)
     $compositeUniques = [];
     foreach ($columns as $cname => $cmeta) {
         if (!empty($cmeta['unique_indexes']) && is_array($cmeta['unique_indexes'])) {
@@ -337,7 +300,6 @@ class SeederGenerator
     }
     $compositeUniques = array_values($compositeUniques);
 
-        // clear context
         $this->currentModel = null;
         $this->currentTable = null;
 
@@ -377,9 +339,6 @@ class SeederGenerator
             }
         }
 
-                                // handle polymorphic *_type/*_id pairs using two-phase approach:
-                                // - initial create uses a safe fallback (User) to satisfy NOT NULL constraints
-                                // - a second-phase updates polymorphic pairs to realistic targets discovered from other models
                                 $polySecondPhaseBlocks = [];
                                 foreach ($columns as $col => $meta) {
                                     if (substr($col, -5) !== '_type') continue;
@@ -387,7 +346,6 @@ class SeederGenerator
                                     $idcol = $base . '_id';
                                     if (!isset($columns[$idcol])) continue;
 
-                                    // discover candidate classes by scanning all models' relations for morph declarations
                                     $candidates = [];
                                     foreach ($allMeta as $mclass => $mdata) {
                                         foreach ($mdata['relations'] as $r) {
@@ -398,7 +356,6 @@ class SeederGenerator
                                         }
                                     }
 
-                                    // also add guessed model by base name
                                     $guess = ucfirst($base);
                                     foreach (array_keys($allMeta) as $mc) {
                                         $parts = explode('\\', trim($mc, '\\'));
@@ -413,9 +370,7 @@ class SeederGenerator
                                     }
                                     $candidates = array_values(array_unique($candidates));
 
-                                    // initial create: fallback to User to satisfy NOT NULL
                                     $fallback = '\\App\\Models\\User';
-                                    // prefer a real user id but never return null if not nullable; fallback to 1 if no records exist
                                     $nullable = $columns[$idcol]['nullable'] ?? false;
                                     if ($nullable) {
                                         $userExpr = "(\\App\\Models\\User::count() > 0 ? \\App\\Models\\User::inRandomOrder()->first()->id : null)";
@@ -429,7 +384,6 @@ class SeederGenerator
                                         $propsAssoc[$idcol] = "'{$idcol}' => " . $userExpr;
                                     }
 
-                                    // prepare second-phase update block
                                     $candArray = implode(', ', array_map(function ($c) { return "'" . addslashes($c) . "'"; }, $candidates));
                                     $sp = "                // assign polymorphic {$base} after records exist\n";
                                     $sp .= "                \$cands = [{$candArray}];\n";
@@ -463,7 +417,6 @@ class SeederGenerator
             return "use {$u};";
         }, $uses));
 
-    // propsCode already prepared from propsAssoc above
 
         if (!empty($attachCode)) {
             $attachCode = trim($attachCode, "\n");
@@ -471,7 +424,6 @@ class SeederGenerator
             $attachCode = PHP_EOL . $attachCode . PHP_EOL;
         }
 
-        // prepare second-phase code for self-referential columns if any were skipped
         $secondPhase = '';
         if (!empty($skippedSelfColumns)) {
             $spLines = [];
@@ -490,15 +442,11 @@ class SeederGenerator
             }
         }
 
-    // build phase1 (create) loop
     $phase1 = "";
     $phase1 .= "        \$faker = FakerFactory::create();\n\n";
-    // initialize available pools for unique-FK columns (one-to-one parents)
     if (!empty($uniqueFkAvailable)) {
         foreach ($uniqueFkAvailable as $ucol => $initExpr) {
-            // $initExpr contains a PHP expression string like "\\App\\Models\\User::pluck('id')->toArray()" or "DB::table('x')->pluck('id')->toArray()"
             $phase1 .= "        \$__available_{$ucol} = {$initExpr} ?: [];\n";
-            // embed source metadata for this unique fk so generated seeder can attempt a placeholder parent creation when pool is empty
             $src = var_export($uniqueFkSource[$ucol] ?? null, true);
             $phase1 .= "        \$__src_{$ucol} = {$src};\n";
             $phase1 .= "        if (empty(\$__available_{$ucol})) {\n";
@@ -534,9 +482,6 @@ class SeederGenerator
         }
         $phase1 .= "\n";
     }
-    // initialize per-run used value sets for unique-ish columns
-    // NOTE: This can consume significant memory for large datasets
-    // Consider limiting the number of records or implementing a more memory-efficient approach
     if (!empty($uniqueCols)) {
         $phase1 .= "        // per-run uniqueness guards (limited to prevent memory issues)\n";
         foreach ($uniqueCols as $uc) {
@@ -545,19 +490,14 @@ class SeederGenerator
         $phase1 .= "\n";
     }
     $phase1 .= "        for (\$i = 0; \$i < {$limit}; ++\$i) {\n";
-    // polyPrepCode was used in older approach; we used fallbacks so not needed here
-    // inject polymorphic prep code into the loop so variables are defined before create()
     if (!empty($polyPrepCode)) {
-        // indent polyPrepCode for inside loop
         $polyPrepCodeIndented = preg_replace('/^/m', '            ', trim($polyPrepCode));
         $phase1 .= $polyPrepCodeIndented . "\n\n";
     }
 
-    // try to create with retries (regenerate payload each attempt) to handle unique/composite constraints
     $phase1 .= "            \$tries = 0; \$created = null;\n";
     $phase1 .= "            while (\$tries < 5 && !isset(\$created)) {\n";
     $phase1 .= "                try {\n";
-    // build payload first so we can pre-check composite-unique tuples
     $phase1 .= "                    \$payload = [\n{$propsCode}\n                    ];\n";
     if (!empty($compositeUniques)) {
         foreach ($compositeUniques as $uix) {
@@ -571,9 +511,7 @@ class SeederGenerator
         }
     }
     $phase1 .= "                    \$created = {$shortModel}::create(\$payload);\n";
-            // pre-create: avoid payload values already used in this run for unique-ish columns
             if (!empty($uniqueCols)) {
-                // inject runtime checks before calling create()
                 $precheckLines = [];
                 foreach ($uniqueCols as $uc) {
                     $precheckLines[] = "                    if (isset(\$__used_{$uc}) && isset(\$payload['{$uc}']) && in_array(\$payload['{$uc}'], \$__used_{$uc}, true)) { \$tries++; continue; }";
@@ -592,10 +530,8 @@ class SeederGenerator
     $phase1 .= "            }\n\n";
     $phase1 .= "            if (isset(\$created) && \$created) {\n";
     if (!empty($polyInLoopUpdate)) {
-        // already contains proper indentation
         $phase1 .= $polyInLoopUpdate;
     }
-    // push created unique-like values into per-run sets so runtime guards avoid duplicates within run
     if (!empty($uniqueCols)) {
         foreach ($uniqueCols as $uc) {
             $phase1 .= "                try { if (isset(\$created->{$uc})) { \$__used_{$uc}[] = \$created->{$uc}; } } catch (\\Throwable \$e) { }\n";
@@ -604,7 +540,6 @@ class SeederGenerator
     $phase1 .= "{$attachCode}            }\n";
     $phase1 .= "        }\n";
 
-    // build phase2: combine self-relation second phase (if any) and polymorphic second phase blocks
     $polySecond = '';
     if (!empty($polySecondPhaseBlocks)) {
         $polySecond = PHP_EOL . implode(PHP_EOL . PHP_EOL, $polySecondPhaseBlocks) . PHP_EOL;
@@ -659,7 +594,6 @@ class {CLASS_NAME} extends Seeder
 }
 PHP;
 
-    // now replace placeholders (we used variable expansions above; in a nowdoc they are literal)
     $replacements = [
         '{USES_CODE}' => $usesCode,
         '{CLASS_NAME}' => $className,
@@ -680,16 +614,13 @@ PHP;
     $precision = $meta['precision'] ?? null;
     $scale = $meta['scale'] ?? null;
 
-        // respect explicit default values from schema metadata, but keep types
         if (array_key_exists('default', $meta) && $meta['default'] !== null && $type !== 'enum') {
             $def = $meta['default'];
-            // normalize quoted defaults like '\'0\'' or '"fixed"'
             if (is_string($def)) {
                 $def = trim($def);
                 $def = trim($def, "'\" ");
             }
 
-            // numeric/name heuristics
             $numericNames = ['quantity','qty','price','subtotal','total','tax','amount','usage_limit','value','shipping','paid_amount'];
             $lower = strtolower($col);
             if (in_array($type, ['integer','bigint','smallint'], true) || (in_array($lower, $numericNames, true) && is_numeric($def))) {
@@ -701,7 +632,6 @@ PHP;
             if ($type === 'boolean' || $lower === 'active' || $lower === 'enabled') {
                 return ((bool)$def) ? 'true' : 'false';
             }
-            // otherwise return as literal string
             return var_export($def, true);
         }
 
@@ -709,18 +639,14 @@ PHP;
     $isUnique = $meta['unique'] ?? false;
 
         $lower = strtolower($col);
-        // heuristic: treat common numeric-sounding column names as numeric
         $numericNames = ['quantity','qty','price','subtotal','total','tax','amount','usage_limit','value','shipping','paid_amount'];
         if (in_array($lower, $numericNames, true) && !in_array($type, ['json','text','enum'], true)) {
-            // float-like if column name contains price or total
             if (strpos($lower, 'price') !== false || strpos($lower, 'total') !== false || strpos($lower, 'tax') !== false || strpos($lower, 'amount') !== false) {
                 $expr = 'round(mt_rand(100,10000)/100, 2)';
             } else {
                 $expr = 'rand(1, 10)';
             }
             if ($nullable) {
-                // previously there was a chance to return null for nullable columns
-                // change to always return a concrete value so generator never emits nulls
                 return $expr;
             }
             return $expr;
@@ -734,13 +660,10 @@ PHP;
                 $min = isset($meta['unsigned']) && $meta['unsigned'] ? 1 : -1000;
                 $max = 10000;
                 $expr = "rand({$min}, {$max})";
-                // if this column is a foreign key target, prefer picking an existing id
                 if (!empty($meta['foreign']) && is_array($meta['foreign'])) {
                     $ft = $meta['foreign']['table'];
                     $fc = $meta['foreign']['column'] ?? 'id';
-                    // try to resolve to a model class if a matching model exists
                     $guessModel = null;
-                    // derive a short name from the foreign table or class
                     $pos = strrpos($ft, '\\');
                     if ($pos !== false) {
                         $ftShort = substr($ft, $pos + 1);
@@ -750,7 +673,6 @@ PHP;
                     $tryA = 'App\\Models\\' . ucfirst($ftShort);
                     if (class_exists($tryA)) { $guessModel = $tryA; }
                         if ($guessModel) {
-                        // prefer an existing foreign id, fallback to 1 or null based on nullability
                         $nullable = $meta['nullable'] ?? false;
                         if ($nullable) {
                             $expr = "({$guessModel}::count() > 0 ? {$guessModel}::inRandomOrder()->first()->{$fc} : null)";
@@ -773,7 +695,6 @@ PHP;
             case 'float':
             case 'double':
             case 'decimal':
-                // honor precision/scale when available
                 if ($scale !== null) {
                     $s = max(0, intval($scale));
                     $factor = pow(10, $s);
@@ -794,25 +715,22 @@ PHP;
             case 'json':
                 $expr = "json_encode([\$faker->word => \$faker->word])";
                 break;
-            case 'enum':
-                if (!empty($meta['enum']) && is_array($meta['enum'])) {
-                    // pick one of the allowed enum values randomly
-                    $choices = array_map(function ($v) { return "'" . addslashes($v) . "'"; }, $meta['enum']);
-                    $list = implode(', ', $choices);
-                    $expr = "[{$list}][array_rand([{$list}])]";
-                } else {
-                    // fallback to word generation if enum values not available
-                    $expr = "\$faker->word()";
-                }
-                break;
             case 'set':
                 if (!empty($meta['set']) && is_array($meta['set'])) {
-                    // pick one or more of allowed set values
                     $choices = array_map(function ($v) { return "'" . addslashes($v) . "'"; }, $meta['set']);
                     $list = implode(', ', $choices);
                     $expr = "[{$list}][array_rand([{$list}])]";
                 } else {
                     $expr = "FakerFactory::create()->word()";
+                }
+                break;
+            case 'enum':
+                if (!empty($meta['enum']) && is_array($meta['enum'])) {
+                    $choices = array_map(function ($v) { return "'" . addslashes($v) . "'"; }, $meta['enum']);
+                    $list = implode(', ', $choices);
+                    $expr = "[{$list}][array_rand([{$list}])]";
+                } else {
+                    $expr = "\$faker->word()";
                 }
                 break;
             case 'binary':
@@ -835,22 +753,14 @@ PHP;
             case 'point':
             case 'linestring':
             case 'polygon':
-                // Generate simple geometry data as JSON for now
                 $expr = "json_encode(['type' => 'Point', 'coordinates' => [\$faker->longitude(), \$faker->latitude()]])";
                 break;
             default:
-                // prefer unique values when column names indicate uniqueness
-                // prefer datetime for *_at and other date-like columns
                 if (preg_match('/(_at$|_date$|_time$|_on$)/i', $col) || in_array($type, ['datetime','date'])) {
-                    // vary timestamps by seconds across a year
-                    // include loop index $i, microtime and random_int so timestamps vary per created row
                     $expr = "Carbon::now()->subSeconds(rand(0, 86400 * 365) + \$i + (int)microtime(true) + random_int(0, 1000000))";
                 } elseif (preg_match('/(^|_)email($|_)/i', $col) || $col === 'email') {
                     $expr = "\$faker->" . ($isUnique ? 'unique()->' : '') . "safeEmail()";
                 } elseif (stripos($col, 'code') !== false) {
-                    // stronger unique code to avoid duplicates across seeding runs
-                    // very low chance of collision: human-friendly prefix + random bytes
-                    // ensure uniqueness if requested
                     if ($isUnique) {
                         $expr = "strtoupper(\$faker->bothify('??-#####') . '-' . strtoupper(bin2hex(random_bytes(8))))";
                     } else {
@@ -866,7 +776,6 @@ PHP;
                     $expr = "\$faker->name()";
                     if ($length) { $expr = "substr({$expr}, 0, {$length})"; }
                 } elseif (stripos($col, 'slug') !== false) {
-                    // ensure slug fits length if provided
                     $expr = "Str::slug(\$faker->unique()->words(3, true))";
                     if ($length) { $expr = "substr({$expr}, 0, {$length})"; }
                 } elseif (stripos($col, 'title') !== false) {
@@ -877,23 +786,16 @@ PHP;
         }
 
         if ($nullable) {
-            // 20% chance to be null
-            // ensure embedded expression is parenthesized to avoid nested ternary ambiguity
             $exprWrapped = '(' . $expr . ')';
-            // always use a concrete value even for nullable columns to avoid nulls
             $maybe = $exprWrapped;
-            // if uniqueness required, wrap the maybe-expression as well
             if ($isUnique) {
                 $tbl = $this->currentTable ?: null;
                 $tableRef = $tbl ? $tbl : ($this->currentModel ? (new \ReflectionClass($this->currentModel))->getShortName() : null);
                 $tableForCheck = $this->currentTable ? $this->currentTable : null;
-                // runtime uniqueness guard
-                // capture $faker and $i from surrounding scope in the generated closure
                 $guard = "(function() use (\$faker, \$i) {\n                    \$v = {$maybe};\n                    \$tries = 0;\n                    while (\$tries < 20 && ";
                 if ($tableForCheck) {
                     $guard .= "DB::table('" . addslashes($tableForCheck) . "')->where('" . addslashes($col) . "', \$v)->exists()";
                 } else {
-                    // fallback: try model if available
                     if ($this->currentModel) {
                         $m = '\\' . ltrim($this->currentModel, '\\');
                         $guard .= "{$m}::where('" . addslashes($col) . "', \$v)->exists()";
@@ -907,15 +809,12 @@ PHP;
             return $maybe;
         }
 
-        // If this column must be unique or looks like a unique identifier, wrap with runtime DB-guard
         $looksUnique = $isUnique || preg_match('/(^|_)email($|_)/i', $col) || stripos($col, 'code') !== false || stripos($col, 'sku') !== false || stripos($col, 'slug') !== false;
         if ($looksUnique) {
             $tbl = $this->currentTable ?: null;
             $tableForCheck = $tbl;
             $valueExpr = $expr;
-            // ensure value expression is parenthesized when used inside closure
             $valueExprWrapped = '(' . $valueExpr . ')';
-            // capture $faker and $i into closure scope
             $guard = "(function() use (\$faker, \$i) {\n                \$v = {$valueExprWrapped};\n                \$tries = 0;\n                while (\$tries < 50 && ";
             if ($tableForCheck) {
                 $guard .= "DB::table('" . addslashes($tableForCheck) . "')->where('" . addslashes($col) . "', \$v)->exists()";

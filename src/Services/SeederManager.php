@@ -36,15 +36,12 @@ class SeederManager
                     if (substr($colName, -3) === '_id') {
                         $prefix = substr($colName, 0, -3);
                         foreach ($models as $candidate) {
-                            // get class short name without relying on framework helper
                             $candidateShort = (strpos($candidate, '\\') !== false) ? substr($candidate, strrpos($candidate, '\\') + 1) : $candidate;
-                            // match by class basename (Post -> post)
                             if (strtolower($candidateShort) === strtolower($prefix)) {
                                 $deps[] = $candidate;
                                 break;
                             }
 
-                            // try matching by table name (handles pluralization and custom table names)
                             try {
                                 if (class_exists($candidate)) {
                                     $inst = new $candidate;
@@ -57,7 +54,6 @@ class SeederManager
                                     }
                                 }
                             } catch (\Throwable $e) {
-                                // ignore instantiation issues
                             }
                         }
                     }
@@ -66,7 +62,7 @@ class SeederManager
 
             foreach ($deps as $dep) {
                 if (in_array($dep, $models, true)) {
-                    $adj[$m][] = $dep; // m depends on dep, so dep should come before m
+                    $adj[$m][] = $dep; 
                 }
             }
         }
@@ -104,7 +100,6 @@ class SeederManager
             $order = array_merge($order, $remaining);
         }
 
-        // Post-process ordering: ensure models referenced by *_id columns come before their dependents.
         $index = array_flip($order);
         foreach ($order as $pos => $m) {
             if (empty($meta[$m]['columns']) || !is_array($meta[$m]['columns'])) {
@@ -118,7 +113,6 @@ class SeederManager
                     $short = end($parts);
                     if (strtolower($short) === strtolower($prefix)) {
                         if (isset($index[$candidate]) && $index[$candidate] > $pos) {
-                            // move candidate to just before m
                             array_splice($order, $index[$candidate], 1);
                             array_splice($order, $pos, 0, [$candidate]);
                             $index = array_flip($order);
@@ -141,7 +135,6 @@ class SeederManager
                             }
                         }
                     } catch (\Throwable $e) {
-                        // ignore
                     }
                 }
             }
@@ -172,13 +165,11 @@ class SeederManager
             $parts = explode('\\', $m);
             $short = end($parts);
             $seederClass = "\\Database\\Seeders\\" . $short . "Seeder::class";
-            // ensure model class literal
             $modelClass = $m;
             $pairs[] = "[ 'seeder' => {$seederClass}, 'model' => {$modelClass}::class ]";
         }
         $pairsCode = implode(",\n            ", $pairs);
 
-        // If a DatabaseSeeder file already exists and user didn't request --force, do not overwrite it.
         if (file_exists($dbSeeder) && !$force) {
             return false;
         }
