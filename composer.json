@@ -1,0 +1,58 @@
+{
+    "name": "dedsec/laravel-autoseeder",
+    "description": "Automatically generate realistic database seeders for Laravel models including relationships.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": [
+        "laravel",
+        "seeder",
+        "faker",
+        "database",
+        "testing",
+        "relationships",
+        "auto-generate",
+        "seeders"
+    ],
+    "authors": [
+        {
+            "name": "Abdullah Iqbal",
+            "email": "mohamedabdullah93@gmail.com",
+            "homepage": "https://github.com/abdullahiqbal93/laravel-autoseeder",
+            "role": "Developer"
+        }
+    ],
+    "homepage": "https://github.com/abdullahiqbal93/laravel-autoseeder",
+    "support": {
+        "issues": "https://github.com/abdullahiqbal93/laravel-autoseeder/issues",
+        "source": "https://github.com/abdullahiqbal93/laravel-autoseeder"
+    },
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/abdullahiqbal93/laravel-autoseeder.git"
+    },
+    "require": {
+        "php": ">=7.4",
+        "illuminate/support": "^8.0|^9.0|^10.0|^11.0|^12.0",
+        "illuminate/console": "^8.0|^9.0|^10.0|^11.0|^12.0",
+        "illuminate/database": "^8.0|^9.0|^10.0|^11.0|^12.0",
+        "fakerphp/faker": "^1.9",
+        "nesbot/carbon": "^2.0|^3.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Dedsec\\LaravelAutoSeeder\\": "src/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Dedsec\\LaravelAutoSeeder\\AutoSeederServiceProvider"
+            ]
+        }
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
