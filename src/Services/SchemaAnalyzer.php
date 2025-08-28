@@ -230,6 +230,82 @@ class SchemaAnalyzer
                         foreach ($idata['cols'] as $col) { if (isset($columns[$col])) { $columns[$col]['unique'] = true; } }
                     }
                 }
+                // Detect enum columns and their values for MySQL
+                $enumRows = DB::select("SELECT COLUMN_NAME, COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND DATA_TYPE = 'enum'", [$dbName, $table]);
+                foreach ($enumRows as $r) {
+                    $col = $r->COLUMN_NAME ?? $r->column_name ?? null;
+                    $colType = $r->COLUMN_TYPE ?? $r->column_type ?? null;
+                    if ($col && $colType && isset($columns[$col])) {
+                        // Extract enum values from COLUMN_TYPE like "enum('value1','value2','value3')"
+                        if (preg_match('/enum\((.*)\)/i', $colType, $m)) {
+                            $vals = array_map(function ($v) { return trim($v, "'\""); }, explode(',', $m[1]));
+                            $columns[$col]['type'] = 'enum';
+                            $columns[$col]['enum'] = $vals;
+                            $maxLen = 0;
+                            foreach ($vals as $v) { $maxLen = max($maxLen, strlen($v)); }
+                            $columns[$col]['length'] = $maxLen ?: null;
+                        }
+                    }
+                }
+            } elseif ($driver === 'pgsql') {
+                $dbName = DB::getDatabaseName();
+                // Detect PostgreSQL enum columns
+                $enumRows = DB::select("
+                    SELECT
+                        c.column_name,
+                        t.typname as enum_type,
+                        e.enumlabel
+                    FROM information_schema.columns c
+                    JOIN pg_type t ON c.udt_name = t.typname
+                    JOIN pg_enum e ON t.oid = e.enumtypid
+                    WHERE c.table_name = ? AND c.table_schema = 'public'
+                    ORDER BY c.column_name, e.enumsortorder
+                ", [$table]);
+
+                $enumData = [];
+                foreach ($enumRows as $r) {
+                    $col = $r->column_name ?? null;
+                    $enumType = $r->enum_type ?? null;
+                    $enumValue = $r->enumlabel ?? null;
+
+                    if ($col && $enumValue) {
+                        if (!isset($enumData[$col])) {
+                            $enumData[$col] = [];
+                        }
+                        $enumData[$col][] = $enumValue;
+                    }
+                }
+
+                // Update columns with enum information
+                foreach ($enumData as $col => $vals) {
+                    if (isset($columns[$col])) {
+                        $columns[$col]['type'] = 'enum';
+                        $columns[$col]['enum'] = $vals;
+                        $maxLen = 0;
+                        foreach ($vals as $v) { $maxLen = max($maxLen, strlen($v)); }
+                        $columns[$col]['length'] = $maxLen ?: null;
+                    }
+                }
+            } elseif ($driver === 'sqlite') {
+                // For SQLite, try to detect enum-like CHECK constraints
+                // This is a best-effort approach since SQLite doesn't have native enums
+                $checkRows = DB::select("PRAGMA table_info('" . $table . "')");
+                foreach ($checkRows as $r) {
+                    $col = $r->name ?? null;
+                    if (!$col || !isset($columns[$col])) continue;
+
+                    // Look for common enum patterns in column names or check if it's TEXT with potential enum values
+                    $colLower = strtolower($col);
+                    $enumPatterns = ['status', 'type', 'state', 'priority', 'level', 'category', 'role'];
+
+                    if (in_array($colLower, $enumPatterns) && $columns[$col]['type'] === 'string') {
+                        // For SQLite, we can't easily detect the exact enum values from CHECK constraints
+                        // So we'll mark it as enum type but without specific values
+                        // The SeederGenerator will handle this gracefully
+                        $columns[$col]['type'] = 'enum';
+                        $columns[$col]['enum'] = null; // Will fallback to string generation
+                    }
+                }
             }
         } catch (\Throwable $e) {
         }
