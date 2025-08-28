@@ -681,7 +681,7 @@ PHP;
     $scale = $meta['scale'] ?? null;
 
         // respect explicit default values from schema metadata, but keep types
-        if (array_key_exists('default', $meta) && $meta['default'] !== null) {
+        if (array_key_exists('default', $meta) && $meta['default'] !== null && $type !== 'enum') {
             $def = $meta['default'];
             // normalize quoted defaults like '\'0\'' or '"fixed"'
             if (is_string($def)) {
