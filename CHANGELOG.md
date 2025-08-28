@@ -9,7 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Enum support**: Enum columns now generate values from their actual allowed enum values instead of generic strings
+- **Multi-database enum support**: Works with MySQL/MariaDB, PostgreSQL, and SQLite
 - Enhanced type-aware data generation for enum columns
+- PostgreSQL enum detection using pg_enum system catalog
+- SQLite enum pattern detection for common enum-like columns
 
 ## [1.0.0] - 2025-08-28
 
