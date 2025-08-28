@@ -96,7 +96,7 @@ php artisan make:auto-seeders --force
 ## Key features
 
 - Automatic model discovery (scans `app/Models` or provided path)
-- Type-aware data generation (respect column types/lengths)
+- Type-aware data generation (respect column types/lengths, including enum values)
 - Foreign-key aware seeding and ordering
 - Relationship detection (belongsTo, hasMany, belongsToMany, morphs, etc.)
 - Unique & composite-unique constraint handling

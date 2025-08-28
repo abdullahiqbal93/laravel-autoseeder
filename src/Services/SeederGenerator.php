@@ -827,6 +827,17 @@ PHP;
                 // Generate simple geometry data as JSON for now
                 $expr = "json_encode(['type' => 'Point', 'coordinates' => [\$faker->longitude(), \$faker->latitude()]])";
                 break;
+            case 'enum':
+                if (!empty($meta['enum']) && is_array($meta['enum'])) {
+                    // Randomly select from the allowed enum values
+                    $choices = array_map(function ($v) { return "'" . addslashes($v) . "'"; }, $meta['enum']);
+                    $list = implode(', ', $choices);
+                    $expr = "[{$list}][array_rand([{$list}])]";
+                } else {
+                    // Fallback to generic string if enum values not available
+                    $expr = "\$faker->word()";
+                }
+                break;
             default:
                 // prefer unique values when column names indicate uniqueness
                 // prefer datetime for *_at and other date-like columns
