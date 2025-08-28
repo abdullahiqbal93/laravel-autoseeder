@@ -2,7 +2,7 @@
 
 [![Latest Version](https://img.shields.io/packagist/v/dedsec/laravel-autoseeder.svg)](https://packagist.org/packages/dedsec/laravel-autoseeder)
 [![PHP Version](https://img.shields.io/packagist/php-v/dedsec/laravel-autoseeder.svg)](https://packagist.org/packages/dedsec/laravel-autoseeder)
-[![License](https://img.shields.io/packagist/l/dedsec/laravel-autoseeder.svg)](https://packagist.org/packages/dedsec/laravel-autoseeder)
+[![License](https://img.shields.io/github/license/abdullahiqbal93/laravel-autoseeder.svg)](https://github.com/abdullahiqbal93/laravel-autoseeder/blob/main/LICENSE)
 
 
 Automatically generate realistic database seeders for Laravel models including relationships.
