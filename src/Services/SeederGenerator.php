@@ -794,6 +794,17 @@ PHP;
             case 'json':
                 $expr = "json_encode([\$faker->word => \$faker->word])";
                 break;
+            case 'enum':
+                if (!empty($meta['enum']) && is_array($meta['enum'])) {
+                    // pick one of the allowed enum values randomly
+                    $choices = array_map(function ($v) { return "'" . addslashes($v) . "'"; }, $meta['enum']);
+                    $list = implode(', ', $choices);
+                    $expr = "[{$list}][array_rand([{$list}])]";
+                } else {
+                    // fallback to word generation if enum values not available
+                    $expr = "\$faker->word()";
+                }
+                break;
             case 'set':
                 if (!empty($meta['set']) && is_array($meta['set'])) {
                     // pick one or more of allowed set values
@@ -826,17 +837,6 @@ PHP;
             case 'polygon':
                 // Generate simple geometry data as JSON for now
                 $expr = "json_encode(['type' => 'Point', 'coordinates' => [\$faker->longitude(), \$faker->latitude()]])";
-                break;
-            case 'enum':
-                if (!empty($meta['enum']) && is_array($meta['enum'])) {
-                    // Randomly select from the allowed enum values
-                    $choices = array_map(function ($v) { return "'" . addslashes($v) . "'"; }, $meta['enum']);
-                    $list = implode(', ', $choices);
-                    $expr = "[{$list}][array_rand([{$list}])]";
-                } else {
-                    // Fallback to generic string if enum values not available
-                    $expr = "\$faker->word()";
-                }
                 break;
             default:
                 // prefer unique values when column names indicate uniqueness

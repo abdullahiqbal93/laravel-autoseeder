@@ -95,6 +95,16 @@ class SchemaAnalyzer
                 if (!$name) continue;
                 $raw = $r->Type ?? $r->type ?? 'string';
                 $norm = $this->normalizeColumnType($raw);
+
+                // Special handling for PostgreSQL enums
+                if ($driver === 'pgsql' && !isset($norm['enum'])) {
+                    $enumValues = $this->getPostgresEnumValues($raw);
+                    if (!empty($enumValues)) {
+                        $norm['type'] = 'enum';
+                        $norm['enum'] = $enumValues;
+                    }
+                }
+
                 $columns[$name] = [
                     'type' => $norm['type'],
                     'enum' => $norm['enum'] ?? null,
@@ -339,5 +349,15 @@ class SchemaAnalyzer
         }
 
         return $out;
+    }
+
+    protected function getPostgresEnumValues(string $enumType): array
+    {
+        try {
+            $rows = DB::select("SELECT enumlabel FROM pg_enum WHERE enumtypid = (SELECT oid FROM pg_type WHERE typname = ?)", [$enumType]);
+            return array_column($rows, 'enumlabel');
+        } catch (\Throwable $e) {
+            return [];
+        }
     }
 }
