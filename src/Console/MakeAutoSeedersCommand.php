@@ -15,9 +15,7 @@ class MakeAutoSeedersCommand extends Command
                           {--path=app/Models : Path to your models directory}
                           {--limit=10 : Number of records to generate per model}
                           {--only= : Comma-separated list of specific models to generate seeders for}
-                          {--force : Overwrite existing seeders without prompting}
-                          {--quiet : Suppress output}
-                          {--verbose : Verbose output}';
+                          {--force : Overwrite existing seeders without prompting}';
 
     protected $description = 'Generate realistic database seeders for Laravel models with relationships and type-aware data.';
 
