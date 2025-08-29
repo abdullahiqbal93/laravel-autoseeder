@@ -48,6 +48,55 @@ class SchemaAnalyzer
                         ];
                     }
                     return $this->augmentWithForeignAndUnique($table, $columns);
+                } elseif ($driver === 'pgsql') {
+                    $rows = DB::select("
+                        SELECT 
+                            column_name,
+                            data_type,
+                            is_nullable,
+                            column_default,
+                            character_maximum_length,
+                            numeric_precision,
+                            numeric_scale
+                        FROM information_schema.columns 
+                        WHERE table_name = ? AND table_schema = 'public'
+                        ORDER BY ordinal_position
+                    ", [$table]);
+                    
+                    foreach ($rows as $r) {
+                        $name = $r->column_name;
+                        $raw = $r->data_type;
+                        $norm = $this->normalizeColumnType($raw);
+                        
+                        // PostgreSQL enum detection
+                        if (empty($norm['enum'])) {
+                            $enumValues = $this->detectPostgresEnum($raw, $table, $name);
+                            if ($enumValues) {
+                                $norm['type'] = 'enum';
+                                $norm['enum'] = $enumValues;
+                            } else {
+                                // Try to detect enum from CHECK constraints using column name
+                                $enumValues = $this->detectPostgresEnum($name, $table, $name);
+                                if ($enumValues) {
+                                    $norm['type'] = 'enum';
+                                    $norm['enum'] = $enumValues;
+                                }
+                            }
+                        }
+                        
+                        $columns[$name] = [
+                            'type' => $norm['type'],
+                            'enum' => $norm['enum'] ?? null,
+                            'nullable' => ($r->is_nullable === 'YES'),
+                            'default' => $r->column_default,
+                            'autoincrement' => false, // Will be set later if needed
+                            'unsigned' => $norm['unsigned'] ?? false,
+                            'length' => $r->character_maximum_length ?? $norm['length'] ?? null,
+                            'precision' => $r->numeric_precision ?? $norm['precision'] ?? null,
+                            'scale' => $r->numeric_scale ?? $norm['scale'] ?? null,
+                        ];
+                    }
+                    return $this->augmentWithForeignAndUnique($table, $columns);
                 }
 
                 $schemaManager = DB::getDoctrineSchemaManager();
@@ -77,11 +126,37 @@ class SchemaAnalyzer
                     $norm = $this->normalizeColumnType($rawType);
 
                     $driver = DB::getDriverName();
-                    if ($driver === 'pgsql' && !$this->isPostgresBuiltinType($rawType) && empty($norm['enum'])) {
-                        $enumValues = $this->detectPostgresEnum($rawType);
+                    if ($driver === 'pgsql' && empty($norm['enum'])) {
+                        $enumValues = $this->detectPostgresEnum($rawType, $table, $col->getName());
                         if ($enumValues) {
                             $norm['type'] = 'enum';
                             $norm['enum'] = $enumValues;
+                        } else {
+                            // Try to detect enum from CHECK constraints using column name
+                            $columnName = $col->getName();
+                            $enumValues = $this->detectPostgresEnum($columnName, $table, $columnName);
+                            if ($enumValues) {
+                                $norm['type'] = 'enum';
+                                $norm['enum'] = $enumValues;
+                            }
+                        }
+                    }
+
+                    // Additional PostgreSQL autoincrement detection for SERIAL columns
+                    $autoincrement = $col->getAutoincrement();
+                    if (!$autoincrement && $driver === 'pgsql') {
+                        $columnName = strtolower($col->getName());
+                        $tableName = strtolower($table);
+                        if ($columnName === 'id') {
+                            // Check if this is likely a SERIAL column by looking for sequence
+                            try {
+                                $sequenceName = $tableName . '_' . $columnName . '_seq';
+                                $sequenceExists = DB::select("SELECT 1 FROM pg_sequences WHERE schemaname = 'public' AND sequencename = ?", [$sequenceName]);
+                                if (!empty($sequenceExists)) {
+                                    $autoincrement = true;
+                                }
+                            } catch (\Throwable $e) {
+                            }
                         }
                     }
 
@@ -94,7 +169,7 @@ class SchemaAnalyzer
                         'enum' => $norm['enum'] ?? null,
                         'nullable' => !$col->getNotnull(),
                         'default' => $col->getDefault(),
-                        'autoincrement' => $col->getAutoincrement(),
+                        'autoincrement' => $autoincrement,
                         'unsigned' => $norm['unsigned'] ?? false,
                         'length' => $length ?? ($norm['length'] ?? null),
                         'precision' => $precision ?? ($norm['precision'] ?? null),
@@ -129,7 +204,7 @@ class SchemaAnalyzer
                     'enum' => $norm['enum'] ?? null,
                     'nullable' => ($r->notnull == 0),
                     'default' => $r->dflt_value,
-                    'autoincrement' => stripos($r->pk ?? '', '1') !== false,
+                    'autoincrement' => ($r->pk == 1), 
                     'unsigned' => $norm['unsigned'] ?? false,
                     'length' => $length,
                     'precision' => $precision,
@@ -159,8 +234,8 @@ class SchemaAnalyzer
                 $norm = $this->normalizeColumnType($raw);
 
                 $driver = DB::getDriverName();
-                if ($driver === 'pgsql' && !$this->isPostgresBuiltinType($raw) && empty($norm['enum'])) {
-                    $enumValues = $this->detectPostgresEnum($raw);
+                if ($driver === 'pgsql' && empty($norm['enum'])) {
+                    $enumValues = $this->detectPostgresEnum($raw, $table, $name);
                     if ($enumValues) {
                         $norm['type'] = 'enum';
                         $norm['enum'] = $enumValues;
@@ -422,8 +497,9 @@ class SchemaAnalyzer
     }
 
 
-    protected function detectPostgresEnum(string $typeName): ?array
+    protected function detectPostgresEnum(string $typeName, string $tableName, ?string $columnName = null): ?array
     {
+        // First, try to detect PostgreSQL native enums by querying pg_enum
         try {
             $enumValues = DB::select("
                 SELECT enumtypid::regtype as type_name, enumlabel
@@ -434,6 +510,55 @@ class SchemaAnalyzer
 
             if (!empty($enumValues)) {
                 return array_column($enumValues, 'enumlabel');
+            }
+        } catch (\Throwable $e) {
+        }
+
+        try {
+            $driver = DB::getDriverName();
+            if ($driver === 'pgsql') {
+                $constraints = DB::select("
+                    SELECT conname, pg_get_constraintdef(oid) as definition
+                    FROM pg_constraint
+                    WHERE conrelid = ?::regclass AND contype = 'c'
+                ", [$tableName]);
+
+                $searchName = $columnName ?: $typeName;
+
+                foreach ($constraints as $constraint) {
+                    $definition = $constraint->definition ?? '';
+
+                    if (stripos($definition, $searchName) !== false) {
+
+                        if (preg_match('/' . preg_quote($searchName, '/') . '\s+IN\s*\(\s*([\'"][^\'"]*[\'"](?:\s*,\s*[\'"][^\'"]*[\'"])*)\s*\)/i', $definition, $matches)) {
+                            $values = $matches[1];
+                            $enumValues = array_map(function ($v) {
+                                return trim($v, "'\"");
+                            }, explode(',', $values));
+                            return $enumValues;
+                        }
+
+                        if (preg_match('/' . preg_quote($searchName, '/') . '\s*=\s*ANY\s*\(\s*ARRAY\s*\[([^\]]+)\]\s*\)/i', $definition, $matches)) {
+                            $values = $matches[1];
+                            $enumValues = array_map(function ($v) {
+                                $v = trim($v);
+                                return trim(trim($v), "'\"");
+                            }, explode(',', $values));
+                            return $enumValues;
+                        }
+
+                        if (preg_match_all("/'([^']+)'/", $definition, $matches)) {
+                            $potentialValues = $matches[1];
+                            $enumValues = array_filter($potentialValues, function($v) {
+                                return strlen($v) > 0 && strlen($v) < 50 && !is_numeric($v);
+                            });
+                            if (!empty($enumValues)) {
+                                $enumValues = array_values($enumValues);
+                                return $enumValues;
+                            }
+                        }
+                    }
+                }
             }
         } catch (\Throwable $e) {
         }

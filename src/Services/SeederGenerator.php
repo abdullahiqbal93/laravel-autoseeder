@@ -42,10 +42,14 @@ class SeederGenerator
         }
 
     $propsAssoc = [];
-    $uniqueFkAvailable = []; 
+    $uniqueFkAvailable = [];
     $uniqueFkSource = [];
     foreach ($columns as $col => $meta) {
+            // Skip autoincrement columns and primary key 'id' columns for PostgreSQL
             if ($meta['autoincrement'] ?? false) {
+                continue;
+            }
+            if ($col === 'id') {
                 continue;
             }
             if (in_array($col, ['created_at', 'updated_at', 'deleted_at'], true)) {
@@ -93,22 +97,23 @@ class SeederGenerator
                             }
 
                             if (class_exists($testClass)) {
-                                $fqOut = '\\' . ltrim($testClass, '\\');
+                                $modelClassName = ltrim($testClass, '\\');
+                                $fqOut = '\\' . $modelClassName;
                                         if (!empty($meta['unique']) || (!empty($meta['unique_indexes']) && count($meta['unique_indexes']) === 1 && count($meta['unique_indexes'][0]) === 1)) {
-                                            $uniqueFkAvailable[$col] = "\\{$fqOut}::pluck('id')->toArray()";
+                                            $uniqueFkAvailable[$col] = "{$fqOut}::pluck('id')->toArray()";
                                             $uniqueFkSource[$col] = ['type' => 'model', 'class' => '\\' . ltrim($testClass, '\\')];
                                             $nullable = $meta['nullable'] ?? false;
                                             if ($nullable) {
-                                                $expr = "(!empty(\$__available_{$col}) ? array_splice(\$__available_{$col}, array_rand(\$__available_{$col}), 1)[0] : ({$fqOut}::count() > 0 ? {$fqOut}::inRandomOrder()->first()->id : null))";
+                                                $expr = "(!empty(\$__available_{$col}) ? array_splice(\$__available_{$col}, array_rand(\$__available_{$col}), 1)[0] : null)";
                                             } else {
-                                                $expr = "(!empty(\$__available_{$col}) ? array_splice(\$__available_{$col}, array_rand(\$__available_{$col}), 1)[0] : ({$fqOut}::count() > 0 ? {$fqOut}::inRandomOrder()->first()->id : 1))";
+                                                $expr = "(!empty(\$__available_{$col}) ? array_splice(\$__available_{$col}, array_rand(\$__available_{$col}), 1)[0] : ({$fqOut}::count() > 0 ? {$fqOut}::inRandomOrder()->first()->id : null))";
                                             }
                                         } else {
                                             $nullable = $meta['nullable'] ?? false;
                                             if ($nullable) {
                                                 $expr = "({$fqOut}::count() > 0 ? {$fqOut}::inRandomOrder()->first()->id : null)";
                                             } else {
-                                                $expr = "({$fqOut}::count() > 0 ? {$fqOut}::inRandomOrder()->first()->id : 1)";
+                                                $expr = "({$fqOut}::count() > 0 ? {$fqOut}::inRandomOrder()->first()->id : null)";
                                             }
                                         }
                             } else {
@@ -117,19 +122,19 @@ class SeederGenerator
                                 if (in_array($lower, $userAliases, true) && class_exists('App\\Models\\User')) {
                                     if (!empty($meta['unique'])) {
                                         $uniqueFkAvailable[$col] = "\\App\\Models\\User::pluck('id')->toArray()";
-                                        $uniqueFkSource[$col] = ['type' => 'model', 'class' => '\\App\\Models\\User'];
+                                        $uniqueFkSource[$col] = ['type' => 'model', 'class' => 'App\\Models\\User'];
                                         $nullable = $meta['nullable'] ?? false;
                                         if ($nullable) {
-                                            $expr = "(!empty(\$__available_{$col}) ? array_splice(\$__available_{$col}, array_rand(\$__available_{$col}), 1)[0] : (\\App\\Models\\User::count() > 0 ? \\App\\Models\\User::inRandomOrder()->first()->id : null))";
+                                            $expr = "(!empty(\$__available_{$col}) ? array_splice(\$__available_{$col}, array_rand(\$__available_{$col}), 1)[0] : null)";
                                         } else {
-                                            $expr = "(!empty(\$__available_{$col}) ? array_splice(\$__available_{$col}, array_rand(\$__available_{$col}), 1)[0] : (\\App\\Models\\User::count() > 0 ? \\App\\Models\\User::inRandomOrder()->first()->id : 1))";
+                                            $expr = "(!empty(\$__available_{$col}) ? array_splice(\$__available_{$col}, array_rand(\$__available_{$col}), 1)[0] : (\\App\\Models\\User::count() > 0 ? \\App\\Models\\User::inRandomOrder()->first()->id : null))";
                                         }
                                     } else {
                                         $nullable = $meta['nullable'] ?? false;
                                         if ($nullable) {
                                             $expr = "(\\App\\Models\\User::count() > 0 ? \\App\\Models\\User::inRandomOrder()->first()->id : null)";
                                         } else {
-                                            $expr = "(\\App\\Models\\User::count() > 0 ? \\App\\Models\\User::inRandomOrder()->first()->id : 1)";
+                                            $expr = "(\\App\\Models\\User::count() > 0 ? \\App\\Models\\User::inRandomOrder()->first()->id : null)";
                                         }
                                     }
                                 } else {
@@ -141,14 +146,14 @@ class SeederGenerator
                                         if ($nullable) {
                                             $expr = "(!empty(\$__available_{$col}) ? array_splice(\$__available_{$col}, array_rand(\$__available_{$col}), 1)[0] : (DB::table('{$tableGuess}')->count() > 0 ? DB::table('{$tableGuess}')->inRandomOrder()->first()->id : null))";
                                         } else {
-                                            $expr = "(!empty(\$__available_{$col}) ? array_splice(\$__available_{$col}, array_rand(\$__available_{$col}), 1)[0] : (DB::table('{$tableGuess}')->count() > 0 ? DB::table('{$tableGuess}')->inRandomOrder()->first()->id : 1))";
+                                            $expr = "(!empty(\$__available_{$col}) ? array_splice(\$__available_{$col}, array_rand(\$__available_{$col}), 1)[0] : (DB::table('{$tableGuess}')->count() > 0 ? DB::table('{$tableGuess}')->inRandomOrder()->first()->id : null))";
                                         }
                                     } else {
                                         $nullable = $meta['nullable'] ?? false;
                                         if ($nullable) {
                                             $expr = "(DB::table('{$tableGuess}')->count() > 0 ? DB::table('{$tableGuess}')->inRandomOrder()->first()->id : null)";
                                         } else {
-                                            $expr = "(DB::table('{$tableGuess}')->count() > 0 ? DB::table('{$tableGuess}')->inRandomOrder()->first()->id : 1)";
+                                            $expr = "(DB::table('{$tableGuess}')->count() > 0 ? DB::table('{$tableGuess}')->inRandomOrder()->first()->id : null)";
                                         }
                                     }
                                 }
@@ -260,7 +265,7 @@ class SeederGenerator
             if ($nullable) {
                 $userExpr = "(\\App\\Models\\User::count() > 0 ? \\App\\Models\\User::inRandomOrder()->first()->id : null)";
             } else {
-                $userExpr = "(\\App\\Models\\User::count() > 0 ? \\App\\Models\\User::inRandomOrder()->first()->id : 1)";
+                $userExpr = "(\\App\\Models\\User::count() > 0 ? \\App\\Models\\User::inRandomOrder()->first()->id : null)";
             }
             $propsAssoc[$idcol] = "'{$idcol}' => " . $userExpr;
         }
@@ -279,7 +284,7 @@ class SeederGenerator
     foreach ($columns as $cname => $cmeta) {
         $isUniqueMeta = $cmeta['unique'] ?? false;
         $lc = strtolower($cname);
-        $heuristicUnique = $isUniqueMeta || preg_match('/(^|_)email($|_)/i', $cname) || stripos($cname, 'code') !== false || stripos($cname, 'sku') !== false || stripos($cname, 'slug') !== false;
+        $heuristicUnique = $isUniqueMeta || preg_match('/(^|_)email$/i', $cname) || preg_match('/_email$/i', $cname) || stripos($cname, 'code') !== false || stripos($cname, 'sku') !== false || stripos($cname, 'slug') !== false;
         if ($heuristicUnique) {
             $uniqueCols[] = $cname;
         }
@@ -375,7 +380,7 @@ class SeederGenerator
                                     if ($nullable) {
                                         $userExpr = "(\\App\\Models\\User::count() > 0 ? \\App\\Models\\User::inRandomOrder()->first()->id : null)";
                                     } else {
-                                        $userExpr = "(\\App\\Models\\User::count() > 0 ? \\App\\Models\\User::inRandomOrder()->first()->id : 1)";
+                                        $userExpr = "(\\App\\Models\\User::count() > 0 ? \\App\\Models\\User::inRandomOrder()->first()->id : null)";
                                     }
                                     if (!isset($propsAssoc[$col])) {
                                         $propsAssoc[$col] = "'{$col}' => '{$fallback}'";
@@ -510,6 +515,8 @@ class SeederGenerator
             $phase1 .= "                    if (DB::table(\$tableName)" . implode('', $conds) . "->exists()) { \$tries++; continue; }\n";
         }
     }
+    // Ensure payload doesn't include an explicit id - let DB sequences assign PKs (important for Postgres)
+    $phase1 .= "                    if (isset(\$payload['id'])) { unset(\$payload['id']); }\n";
     $phase1 .= "                    \$created = {$shortModel}::create(\$payload);\n";
             if (!empty($uniqueCols)) {
                 $precheckLines = [];
@@ -614,11 +621,16 @@ PHP;
     $precision = $meta['precision'] ?? null;
     $scale = $meta['scale'] ?? null;
 
-        if (array_key_exists('default', $meta) && $meta['default'] !== null) {
+        if (array_key_exists('default', $meta) && $meta['default'] !== null && $type !== 'enum') {
             $def = $meta['default'];
             if (is_string($def)) {
                 $def = trim($def);
-                $def = trim($def, "'\" ");
+                // Handle PostgreSQL type casting like 'value'::type
+                if (preg_match("/^'(.+)'::.+$/", $def, $matches)) {
+                    $def = $matches[1];
+                } else {
+                    $def = trim($def, "'\" ");
+                }
             }
 
             $numericNames = ['quantity','qty','price','subtotal','total','tax','amount','usage_limit','value','shipping','paid_amount'];
@@ -632,11 +644,7 @@ PHP;
             if ($type === 'boolean' || $lower === 'active' || $lower === 'enabled') {
                 return ((bool)$def) ? 'true' : 'false';
             }
-            if ($type === 'enum') {
-                // Fall through to the switch statement for proper enum handling
-            } else {
-                return var_export($def, true);
-            }
+            return var_export($def, true);
         }
 
     $nullable = $meta['nullable'] ?? false;
@@ -663,7 +671,12 @@ PHP;
             case 'smallint':
                 $min = isset($meta['unsigned']) && $meta['unsigned'] ? 1 : -1000;
                 $max = 10000;
-                $expr = "rand({$min}, {$max})";
+                // Special handling for ID columns to avoid 0 values
+                if (strtolower($col) === 'id') {
+                    $expr = "rand(1, {$max})";
+                } else {
+                    $expr = "rand({$min}, {$max})";
+                }
                 if (!empty($meta['foreign']) && is_array($meta['foreign'])) {
                     $ft = $meta['foreign']['table'];
                     $fc = $meta['foreign']['column'] ?? 'id';
@@ -678,17 +691,19 @@ PHP;
                     if (class_exists($tryA)) { $guessModel = $tryA; }
                         if ($guessModel) {
                         $nullable = $meta['nullable'] ?? false;
-                        if ($nullable) {
-                            $expr = "({$guessModel}::count() > 0 ? {$guessModel}::inRandomOrder()->first()->{$fc} : null)";
-                        } else {
-                            $expr = "({$guessModel}::count() > 0 ? {$guessModel}::inRandomOrder()->first()->{$fc} : 1)";
-                        }
+                            if ($nullable) {
+                                $expr = "({$guessModel}::count() > 0 ? {$guessModel}::inRandomOrder()->first()->{$fc} : null)";
+                            } else {
+                                // Avoid inserting a hardcoded id=1 fallback for Postgres; use null to let DB handle missing parents
+                                $expr = "({$guessModel}::count() > 0 ? {$guessModel}::inRandomOrder()->first()->{$fc} : null)";
+                            }
                     } else {
                         $nullable = $meta['nullable'] ?? false;
                         if ($nullable) {
                             $expr = "(DB::table('{$ft}')->count() > 0 ? DB::table('{$ft}')->inRandomOrder()->first()->{$fc} : null)";
                         } else {
-                            $expr = "(DB::table('{$ft}')->count() > 0 ? DB::table('{$ft}')->inRandomOrder()->first()->{$fc} : 1)";
+                            // Do not assume id=1 exists. Prefer null so DB sequences/autoincrement remain authoritative.
+                            $expr = "(DB::table('{$ft}')->count() > 0 ? DB::table('{$ft}')->inRandomOrder()->first()->{$fc} : null)";
                         }
                     }
                 }
@@ -735,7 +750,8 @@ PHP;
                     }, $meta['enum']);
                     $list = implode(', ', $choices);
 
-                    $expr = "[{$list}][array_rand([{$list}])]";
+                    // Use random selection from enum values
+                    $expr = "\$faker->randomElement([{$list}])";
                 } else {
                     $expr = "\$faker->word()";
                 }
@@ -787,6 +803,8 @@ PHP;
                     if ($length) { $expr = "substr({$expr}, 0, {$length})"; }
                 } elseif (stripos($col, 'title') !== false) {
                     $expr = "\$faker->sentence()";
+                } elseif (stripos($col, 'password') !== false) {
+                    $expr = "bcrypt(\$faker->password())";
                 } else {
                     $expr = "\$faker->word()";
                 }
@@ -816,7 +834,7 @@ PHP;
             return $maybe;
         }
 
-        $looksUnique = $isUnique || preg_match('/(^|_)email($|_)/i', $col) || stripos($col, 'code') !== false || stripos($col, 'sku') !== false || stripos($col, 'slug') !== false;
+        $looksUnique = $isUnique || preg_match('/(^|_)email$/i', $col) || preg_match('/_email$/i', $col) || stripos($col, 'code') !== false || stripos($col, 'sku') !== false || stripos($col, 'slug') !== false;
         if ($looksUnique) {
             $tbl = $this->currentTable ?: null;
             $tableForCheck = $tbl;
