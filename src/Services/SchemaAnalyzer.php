@@ -486,9 +486,15 @@ class SchemaAnalyzer
                 return null;
             }
 
-            $pattern = '/CHECK\s*\(\s*' . preg_quote($column, '/') . '\s+IN\s*\(\s*([\'"][^\'"]*[\'"](?:\s*,\s*[\'"][^\'"]*[\'"])*)\s*\)\s*\)/i';
-            
-            if (preg_match($pattern, $createTableSql, $matches)) {
+
+
+
+
+
+            // Pattern 1: IN clause with optional NULL check
+            $pattern1 = '/CHECK\s*\(\s*["\']?' . preg_quote($column, '/') . '["\']?\s+IN\s*\(\s*([\'"][^\'"]*[\'"](?:\s*,\s*[\'"][^\'"]*[\'"])*)\s*\)\s*(?:OR\s*["\']?' . preg_quote($column, '/') . '["\']?\s+IS\s+NULL)?\s*\)/i';
+
+            if (preg_match($pattern1, $createTableSql, $matches)) {
                 $values = $matches[1];
                 $enumValues = array_map(function ($v) {
                     return trim(trim($v), "'\"");
@@ -496,13 +502,58 @@ class SchemaAnalyzer
                 return $enumValues;
             }
 
-            $orPattern = '/CHECK\s*\(\s*(?:' . preg_quote($column, '/') . '\s*=\s*[\'"][^\'"]*[\'"]\s+OR\s+)*' . preg_quote($column, '/') . '\s*=\s*[\'"]([^\'"]*)[\'"]\s*\)/i';
-            
-            if (preg_match_all('/' . preg_quote($column, '/') . '\s*=\s*[\'"]([^\'"]*)[\'"]/i', $createTableSql, $orMatches)) {
+            // Pattern 2: OR conditions with optional NULL check
+            $orPattern = '/CHECK\s*\(\s*(?:(?:["\']?' . preg_quote($column, '/') . '["\']?\s*=\s*[\'"][^\'"]*[\'"]\s+OR\s+)*["\']?' . preg_quote($column, '/') . '["\']?\s*=\s*[\'"]([^\'"]*)[\'"]\s*(?:OR\s*["\']?' . preg_quote($column, '/') . '["\']?\s+IS\s+NULL)?\s*)\s*\)/i';
+
+            if (preg_match_all('/["\']?' . preg_quote($column, '/') . '["\']?\s*=\s*[\'"]([^\'"]*)[\'"]/i', $createTableSql, $orMatches)) {
                 if (!empty($orMatches[1])) {
                     return $orMatches[1];
                 }
             }
+
+            // Pattern 3: More flexible IN clause 
+            $pattern3 = '/CHECK\s*\(\s*["\']?' . preg_quote($column, '/') . '["\']?\s+IN\s*\(\s*([^)]+)\)\s*\)/i';
+
+            if (preg_match($pattern3, $createTableSql, $matches)) {
+                $valuesStr = $matches[1];
+                // Extract quoted values
+                if (preg_match_all('/[\'"]([^\'"]+)[\'"]/', $valuesStr, $valueMatches)) {
+                    return $valueMatches[1];
+                }
+            }
+
+            // Pattern 4: Simple IN clause without NULL check
+            $pattern4 = '/CHECK\s*\(\s*["\']?' . preg_quote($column, '/') . '["\']?\s+IN\s*\(\s*([^)]+)\)\s*\)/i';
+
+            if (preg_match($pattern4, $createTableSql, $matches)) {
+                $valuesStr = $matches[1];
+                // Extract quoted values - handle both single and double quotes
+                if (preg_match_all('/[\'"]([^\'"]+)[\'"]/', $valuesStr, $valueMatches)) {
+                    return $valueMatches[1];
+                }
+                // Try unquoted values as fallback
+                $values = array_map('trim', explode(',', $valuesStr));
+                $values = array_filter($values, function($v) { return !empty($v); });
+                if (!empty($values)) {
+                    return $values;
+                }
+            }
+
+            // Pattern 5: Look for any CHECK constraint containing the column
+            $pattern5 = '/CHECK\s*\([^)]*["\']?' . preg_quote($column, '/') . '["\']?[^)]*\)/i';
+
+            if (preg_match($pattern5, $createTableSql, $matches)) {
+                // Try to extract values from IN clause specifically
+                if (preg_match('/["\']?' . preg_quote($column, '/') . '["\']?\s+IN\s*\(\s*([^)]+)\)/i', $matches[0], $inMatch)) {
+                    $valuesStr = $inMatch[1];
+                    if (preg_match_all('/[\'"]([^\'"]+)[\'"]/', $valuesStr, $valueMatches)) {
+                        return $valueMatches[1];
+                    }
+                }
+            }
+
+            // Note: SQLite enum detection relies on CHECK constraints
+            // If no CHECK constraints are found, columns will be treated as strings
 
         } catch (\Throwable $e) {
         }

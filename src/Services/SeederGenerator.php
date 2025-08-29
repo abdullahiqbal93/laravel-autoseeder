@@ -614,7 +614,7 @@ PHP;
     $precision = $meta['precision'] ?? null;
     $scale = $meta['scale'] ?? null;
 
-        if (array_key_exists('default', $meta) && $meta['default'] !== null && $type !== 'enum') {
+        if (array_key_exists('default', $meta) && $meta['default'] !== null) {
             $def = $meta['default'];
             if (is_string($def)) {
                 $def = trim($def);
@@ -632,7 +632,11 @@ PHP;
             if ($type === 'boolean' || $lower === 'active' || $lower === 'enabled') {
                 return ((bool)$def) ? 'true' : 'false';
             }
-            return var_export($def, true);
+            if ($type === 'enum') {
+                // Fall through to the switch statement for proper enum handling
+            } else {
+                return var_export($def, true);
+            }
         }
 
     $nullable = $meta['nullable'] ?? false;
@@ -726,9 +730,12 @@ PHP;
                 break;
             case 'enum':
                 if (!empty($meta['enum']) && is_array($meta['enum'])) {
-                    $choices = array_map(function ($v) { return "'" . addslashes($v) . "'"; }, $meta['enum']);
+                    $choices = array_map(function ($v) {
+                        return var_export($v, true);
+                    }, $meta['enum']);
                     $list = implode(', ', $choices);
-                    $expr = "\$faker->randomElement([{$list}])";
+
+                    $expr = "[{$list}][array_rand([{$list}])]";
                 } else {
                     $expr = "\$faker->word()";
                 }
